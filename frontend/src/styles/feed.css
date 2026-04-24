@@ -1,0 +1,263 @@
+/* ═══════════════════════════════════════════════════════════
+   FEED SYSTEM STYLES — Mood-Adaptive Live Feed
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Feed Layout ───────────────────────────────────────── */
+.feed-layout {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: var(--gap-lg);
+  align-items: start;
+}
+
+/* ── Feed Tabs ─────────────────────────────────────────── */
+.feed-tabs {
+  display: flex; gap: 2px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 4px;
+  border: 1px solid var(--border);
+  margin-bottom: var(--gap);
+}
+.feed-tab {
+  flex: 1; padding: 10px 16px;
+  background: transparent; border: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem; font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer; transition: all var(--speed-fast);
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.feed-tab:hover { color: var(--text-primary); background: var(--surface-light); }
+.feed-tab.active {
+  background: var(--purple);
+  color: white;
+  box-shadow: 0 2px 8px var(--purple-glow);
+}
+
+/* ── Mood Filter ───────────────────────────────────────── */
+.mood-filter {
+  display: flex; gap: 8px;
+  margin-bottom: var(--gap);
+  flex-wrap: wrap;
+}
+.mood-chip {
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem; font-weight: 600;
+  cursor: pointer;
+  transition: all var(--speed-fast);
+  display: flex; align-items: center; gap: 4px;
+}
+.mood-chip:hover { border-color: var(--border-light); color: var(--text-primary); }
+.mood-chip.active {
+  border-color: var(--mood-border, var(--purple));
+  background: var(--mood-bg, var(--purple-glow));
+  color: var(--mood-accent, var(--purple-light));
+}
+
+/* ── Post Card ─────────────────────────────────────────── */
+.post-card {
+  margin-bottom: var(--gap);
+  border-left: 4px solid var(--mood-border, var(--border));
+  transition: all var(--speed);
+  position: relative;
+  overflow: hidden;
+}
+.post-card::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: var(--mood-bg, transparent);
+  pointer-events: none;
+  transition: background var(--speed-slow);
+}
+.post-card > * { position: relative; z-index: 1; }
+
+.post-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.post-author {
+  display: flex; align-items: center; gap: 10px;
+}
+.post-avatar {
+  width: 36px; height: 36px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.post-author-info { display: flex; flex-direction: column; }
+.post-author-name {
+  font-size: 0.85rem; font-weight: 600; color: var(--text-primary);
+  display: flex; align-items: center; gap: 6px;
+}
+.post-author-tag {
+  font-size: 0.7rem; color: var(--text-muted); font-weight: 500;
+  font-family: 'Courier New', monospace;
+}
+.post-time { font-size: 0.75rem; color: var(--text-muted); }
+
+.post-badges {
+  display: flex; gap: 6px; align-items: center;
+}
+
+.post-content {
+  font-size: 0.95rem; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+  margin-bottom: 12px;
+}
+
+.post-tags {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 12px;
+}
+.tag {
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--purple-light);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem; font-weight: 600;
+}
+
+.post-mood-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: var(--radius-full);
+  font-size: 0.7rem; font-weight: 600;
+  background: var(--mood-bg);
+  color: var(--mood-accent);
+  border: 1px solid var(--mood-border);
+}
+
+.post-actions {
+  display: flex; align-items: center; gap: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.post-action-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 6px 12px; border-radius: var(--radius-sm);
+  background: transparent; border: none;
+  color: var(--text-secondary); font-size: 0.8rem; font-weight: 500;
+  cursor: pointer; transition: all var(--speed-fast);
+}
+.post-action-btn:hover { background: var(--surface-light); color: var(--text-primary); }
+.post-action-btn.liked { color: var(--danger); }
+
+.post-activity {
+  display: flex; align-items: center; gap: 6px;
+  margin-left: auto;
+  font-size: 0.72rem; color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Post Engagement Velocity ──────────────────────────── */
+.velocity-bar {
+  display: flex; gap: 1px; align-items: flex-end; height: 16px;
+}
+.velocity-bar span {
+  width: 3px; background: var(--purple-light); border-radius: 1px;
+  transition: height var(--speed);
+}
+
+/* ── Live Indicator ────────────────────────────────────── */
+.live-indicator {
+  position: sticky; top: 64px; z-index: 50;
+  display: flex; justify-content: center;
+  margin-bottom: var(--gap);
+}
+.live-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 20px;
+  background: var(--surface);
+  border: 1px solid var(--purple);
+  border-radius: var(--radius-full);
+  color: var(--purple-light);
+  font-size: 0.8rem; font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--purple-glow);
+  transition: all var(--speed-fast);
+  animation: slideInDown 300ms ease-out;
+}
+.live-pill:hover { background: var(--purple); color: white; }
+.live-pill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--purple-light);
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+/* ── Sidebar ───────────────────────────────────────────── */
+.feed-sidebar { position: sticky; top: 76px; }
+.about-card { margin-bottom: var(--gap); }
+.about-card h3 {
+  font-weight: 700; margin-bottom: 12px; font-size: 1rem;
+  display: flex; align-items: center; gap: 8px;
+}
+
+/* ── Comment Section ───────────────────────────────────── */
+.comment-section {
+  margin-top: var(--gap); padding-top: var(--gap);
+  border-top: 1px solid var(--border);
+}
+.comment-form { display: flex; gap: 8px; margin-bottom: 12px; }
+.comment-item {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(42, 42, 90, 0.5);
+  font-size: 0.85rem;
+}
+.comment-author {
+  color: var(--text-muted); margin-right: 8px;
+  font-size: 0.8rem;
+}
+
+/* ── Empty State ───────────────────────────────────────── */
+.empty-state {
+  text-align: center; padding: 64px var(--gap-lg);
+  color: var(--text-muted);
+}
+.empty-state-icon { font-size: 3rem; margin-bottom: 12px; }
+.empty-state-text { font-size: 0.95rem; }
+
+/* ── Create Post ───────────────────────────────────────── */
+.create-post { margin-bottom: var(--gap-lg); }
+.create-post-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 12px;
+}
+.create-post-header h3 { font-weight: 700; font-size: 1rem; }
+
+.mood-selector {
+  display: flex; gap: 6px;
+  margin-bottom: 12px;
+}
+.mood-option {
+  padding: 5px 12px; border-radius: var(--radius-full);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-secondary); font-size: 0.78rem; font-weight: 600;
+  cursor: pointer; transition: all var(--speed-fast);
+  display: flex; align-items: center; gap: 4px;
+}
+.mood-option:hover { border-color: var(--border-light); }
+.mood-option.active {
+  border-color: var(--mood-border);
+  background: var(--mood-bg);
+  color: var(--mood-accent);
+}
+
+.create-post-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--gap);
+  margin-top: 12px;
+}
+.char-count { font-size: 0.75rem; color: var(--text-muted); }
+
+/* ── Responsive ────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .feed-layout { grid-template-columns: 1fr; }
+  .feed-sidebar { position: static; display: none; }
+}
+@media (max-width: 480px) {
+  .feed-tabs { flex-wrap: wrap; }
+  .mood-filter { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
+}

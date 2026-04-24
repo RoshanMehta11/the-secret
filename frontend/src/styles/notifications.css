@@ -1,0 +1,128 @@
+/* ═══════════════════════════════════════════════════════════
+   NOTIFICATION SYSTEM STYLES
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Notification Panel (dropdown) ─────────────────────── */
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px); right: 0;
+  width: 380px;
+  max-height: 480px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column;
+  animation: slideDown 200ms ease-out;
+  z-index: 500;
+}
+.notif-panel-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.notif-panel-header h3 { font-size: 1rem; font-weight: 700; }
+.notif-panel-tabs {
+  display: flex; gap: 2px; padding: 8px 12px;
+  background: var(--bg-secondary);
+}
+.notif-tab {
+  flex: 1; padding: 6px 10px;
+  background: transparent; border: none;
+  color: var(--text-muted); font-size: 0.75rem; font-weight: 600;
+  border-radius: 6px; cursor: pointer;
+  transition: all var(--speed-fast);
+}
+.notif-tab:hover { color: var(--text-secondary); }
+.notif-tab.active { background: var(--surface); color: var(--text-primary); }
+
+.notif-list {
+  flex: 1; overflow-y: auto;
+}
+.notif-item {
+  display: flex; gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(42, 42, 90, 0.3);
+  cursor: pointer;
+  transition: background var(--speed-fast);
+}
+.notif-item:hover { background: var(--surface-light); }
+.notif-item.unread { background: rgba(124, 58, 237, 0.05); }
+.notif-item.unread::before {
+  content: '';
+  position: absolute; left: 8px; top: 50%;
+  width: 6px; height: 6px;
+  background: var(--purple); border-radius: 50%;
+  transform: translateY(-50%);
+}
+.notif-item { position: relative; }
+
+.notif-icon {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+.notif-icon.social { background: rgba(239, 68, 68, 0.15); }
+.notif-icon.message { background: rgba(59, 130, 246, 0.15); }
+.notif-icon.system { background: rgba(245, 158, 11, 0.15); }
+
+.notif-content { flex: 1; min-width: 0; }
+.notif-title { font-size: 0.85rem; font-weight: 500; line-height: 1.4; }
+.notif-body { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+.notif-time { font-size: 0.7rem; color: var(--text-muted); margin-top: 4px; }
+
+.notif-empty {
+  padding: 40px; text-align: center;
+  color: var(--text-muted); font-size: 0.9rem;
+}
+
+.notif-panel-footer {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+/* ── Toast Notification ────────────────────────────────── */
+.toast-container {
+  position: fixed;
+  top: 76px; right: 20px;
+  display: flex; flex-direction: column; gap: 8px;
+  z-index: 400;
+  pointer-events: none;
+}
+.toast-notif {
+  pointer-events: auto;
+  min-width: 300px; max-width: 380px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--purple);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  display: flex; gap: 10px; align-items: flex-start;
+  cursor: pointer;
+}
+.toast-notif.entering { animation: toastIn 350ms cubic-bezier(0.68, -0.55, 0.265, 1.55); }
+.toast-notif.exiting { animation: toastOut 300ms ease-in forwards; }
+
+/* ── Full Notifications Page ───────────────────────────── */
+.notif-page-list { display: flex; flex-direction: column; gap: 8px; }
+.notif-page-item {
+  display: flex; gap: var(--gap);
+  padding: var(--gap);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: all var(--speed-fast);
+}
+.notif-page-item:hover { border-color: var(--border-light); }
+.notif-page-item.unread { border-left: 3px solid var(--purple); }
+
+/* ── Responsive ────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .notif-panel { width: calc(100vw - 20px); right: -60px; }
+  .toast-container { right: 10px; left: 10px; }
+  .toast-notif { min-width: auto; width: 100%; }
+}

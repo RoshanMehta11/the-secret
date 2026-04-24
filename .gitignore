@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════
+# THE SECRET — .gitignore
+# ═══════════════════════════════════════════════════════════
+
+# ── Dependencies ──────────────────────────────────────────
+node_modules/
+*/node_modules/
+
+# ── Environment Variables (NEVER commit secrets) ─────────
+.env
+backend/.env
+frontend/.env
+
+# ── Build Output ──────────────────────────────────────────
+frontend/build/
+dist/
+
+# ── Logs ──────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── OS Files ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── IDE / Editor ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Runtime / Debug ───────────────────────────────────────
+*.pid
+*.seed
+*.pid.lock

@@ -1,0 +1,53 @@
+.home-page {
+  padding: 32px 0;
+  min-height: calc(100vh - 60px);
+}
+
+.home-header {
+  margin-bottom: 24px;
+}
+
+.home-header .page-title {
+  margin-bottom: 4px;
+}
+
+.category-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.cat-tab {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.cat-tab:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.cat-tab.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-secondary);
+}
+
+.empty-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+}
