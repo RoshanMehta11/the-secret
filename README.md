@@ -196,11 +196,6 @@ db.users.updateOne({ email: "your@email.com" }, { $set: { role: "admin" } })
 
 ---
 
-## 📸 Screenshots
-
-The platform features a dark, glassmorphism-inspired UI with mood-adaptive color themes and real-time interactions.
-
----
 
 ## 📄 License
 
