@@ -3,22 +3,23 @@ const Redis = require('ioredis');
 // ─── Redis Client Configuration ──────────────────────────────────
 // Used for: caching, rate limiting, presence, job queues, pub/sub
 
-const redisConfig = {
-  host: process.env.REDIS_HOST || '127.0.0.1',
-  port: parseInt(process.env.REDIS_PORT) || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  db: parseInt(process.env.REDIS_DB) || 0,
-  maxRetriesPerRequest: 3,
-  retryStrategy(times) {
-    const delay = Math.min(times * 200, 5000);
-    console.log(`⏳ Redis retry attempt ${times}, next in ${delay}ms`);
-    return delay;
-  },
-  reconnectOnError(err) {
-    const targetErrors = ['READONLY', 'ECONNRESET'];
-    return targetErrors.some((e) => err.message.includes(e));
-  },
-};
+const redisConfig = process.env.REDIS_URL
+  ? {
+    // ✅ Production (Render / cloud Redis)
+    url: process.env.REDIS_URL,
+    maxRetriesPerRequest: 3,
+    retryStrategy(times) {
+      const delay = Math.min(times * 200, 5000);
+      console.log(`⏳ Redis retry attempt ${times}, next in ${delay}ms`);
+      return delay;
+    },
+  }
+  : {
+    // ✅ Local development fallback
+    host: '127.0.0.1',
+    port: 6379,
+    db: 0,
+  };
 
 // Primary client for commands (get/set/incr etc.)
 const redis = new Redis(redisConfig);
