@@ -21,12 +21,21 @@ const redisConfig = process.env.REDIS_URL
     db: 0,
   };
 
-// Primary client for commands (get/set/incr etc.)
-const redis = new Redis(redisConfig);
+let redis;
+
+if (process.env.REDIS_URL) {
+  redis = new Redis(redisConfig);
+  console.log("✅ Redis connected");
+} else {
+  console.log("⚠️ Redis disabled (no REDIS_URL)");
+}
 
 // Separate clients for pub/sub (required by Socket.IO Redis adapter)
-const createPubClient = () => new Redis(redisConfig);
-const createSubClient = () => new Redis(redisConfig);
+const createPubClient = () =>
+  process.env.REDIS_URL ? new Redis(redisConfig) : null;
+
+const createSubClient = () =>
+  process.env.REDIS_URL ? new Redis(redisConfig) : null;
 
 // Connection event logging
 redis.on('connect', () => console.log('🔴 Redis connected'));
