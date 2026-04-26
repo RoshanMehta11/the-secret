@@ -350,11 +350,18 @@ io.on('connection', async (socket) => {
         const recipientStr = otherUserId.toString();
         const isRecipientOnline = await presenceService.isOnline(recipientStr);
 
-        // Send to conversation room (if recipient is in it)
-        socket.to(`conv_${conversationId}`).emit('new_message', {
+        const messagePayload = {
           ...populated.toObject(),
+          conversationId,
           seqNum,
-        });
+        };
+
+        // Send to conversation room (if recipient has chat window open)
+        socket.to(`conv_${conversationId}`).emit('new_message', messagePayload);
+
+        // CRITICAL FIX: Also send directly to recipient's personal user room
+        // This ensures they receive the message even if chat window is closed
+        io.to(recipientStr).emit('receive_message', messagePayload);
 
         if (isRecipientOnline) {
           // Recipient is online — also send notification badge

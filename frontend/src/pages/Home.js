@@ -29,11 +29,17 @@ export default function Home() {
   const newPostsRef = useRef([]);
 
   // ── Load Posts ──────────────────────────────────────────
-  const loadPosts = useCallback(async (isInitial = true) => {
+  // Use a ref for cursor to avoid stale closures in loadMore
+  const cursorRef = useRef(null);
+
+  const loadPosts = useCallback(async (isInitial = true, currentCursor = null) => {
+    // GUARD: prevent duplicate calls
     if (isInitial) {
       setLoading(true);
+      cursorRef.current = null;
       setCursor(null);
     } else {
+      if (loadingMore) return; // prevent concurrent load-more calls
       setLoadingMore(true);
     }
 
@@ -42,17 +48,25 @@ export default function Home() {
         sort: sortMode,
         limit: 15,
         ...(moodFilter && { mood: moodFilter }),
-        ...(!isInitial && cursor && { cursor }),
+        ...(!isInitial && currentCursor && { cursor: currentCursor }),
       };
       const { data } = await postsAPI.getAll(params);
 
       if (isInitial) {
-        setPosts(data.posts);
-        updateMoodFromPosts(data.posts);
+        setPosts(data.posts || []);
+        updateMoodFromPosts(data.posts || []);
       } else {
-        setPosts((prev) => [...prev, ...data.posts]);
+        // DEDUPLICATION: use Map keyed by _id to prevent duplicates
+        setPosts((prev) => {
+          const merged = [...prev, ...(data.posts || [])];
+          return [...new Map(merged.map((p) => [p._id, p])).values()];
+        });
       }
-      setCursor(data.nextCursor || null);
+
+      // Update cursor ref AND state
+      const nextCursor = data.nextCursor || null;
+      cursorRef.current = nextCursor;
+      setCursor(nextCursor);
       setHasMore(data.hasMore || false);
     } catch {
       toast.error('Failed to load posts');
@@ -60,11 +74,12 @@ export default function Home() {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [sortMode, moodFilter, cursor, updateMoodFromPosts]);
+  }, [sortMode, moodFilter, loadingMore, updateMoodFromPosts]); // eslint-disable-line
 
   // Initial load + reset on filter change
   useEffect(() => {
     setPosts([]);
+    cursorRef.current = null;
     setCursor(null);
     setNewPostCount(0);
     newPostsRef.current = [];
@@ -73,8 +88,12 @@ export default function Home() {
 
   // ── Infinite Scroll ────────────────────────────────────
   const loadMore = useCallback(() => {
-    if (cursor && !loadingMore) loadPosts(false);
-  }, [cursor, loadingMore, loadPosts]);
+    // GUARD: only trigger if we have more AND we're not already loading
+    if (!hasMore || loadingMore || loading) return;
+    const currentCursor = cursorRef.current;
+    if (!currentCursor) return;
+    loadPosts(false, currentCursor);
+  }, [hasMore, loadingMore, loading, loadPosts]);
   const sentinelRef = useInfiniteScroll(loadMore, hasMore, loadingMore);
 
   // ── Real-Time: New posts via socket ────────────────────

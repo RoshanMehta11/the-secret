@@ -26,6 +26,9 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
   const postCtx = conversation.postContext;
   const postMood = postCtx?.mood ? getMoodTheme(postCtx.mood) : null;
 
+  // Derive current user's ID once — handles both formats
+  const myId = (user?.id || user?._id || '').toString();
+
   // Load messages
   useEffect(() => {
     setLoading(true);
@@ -51,30 +54,49 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
     };
   }, [socket, convId]);
 
-  // Listen for new messages in this conversation
+  // Listen for new messages — handles BOTH channels with cleanup
   useEffect(() => {
     if (!socket) return;
+
     const handler = (msg) => {
-      if (msg.conversationId === convId || msg.conversation === convId) {
-        // Deduplicate: don't add if we already have it (from optimistic update)
-        setMessages((prev) => {
-          const exists = prev.some(
-            (m) => (m._id === msg._id) || (m.clientMsgId && m.clientMsgId === msg.clientMsgId)
+      // Validate this message belongs to the current conversation
+      const msgConvId = msg.conversationId || msg.conversation;
+      if (msgConvId && msgConvId !== convId && msgConvId.toString() !== convId.toString()) return;
+
+      // DEBUG: log actual message structure (remove in production)
+      console.log('[MSG DEBUG] Received message:', {
+        sender: msg.sender,
+        senderId: msg.senderId,
+        senderType: typeof msg.sender,
+        convId: msgConvId,
+      });
+
+      setMessages((prev) => {
+        // Deduplicate: check by _id OR clientMsgId
+        const exists = prev.some(
+          (m) => (m._id === msg._id) || (m.clientMsgId && m.clientMsgId === msg.clientMsgId)
+        );
+        if (exists) {
+          // Replace optimistic message with confirmed server message
+          return prev.map((m) =>
+            (m._id === msg._id || (m.clientMsgId && m.clientMsgId === msg.clientMsgId))
+              ? { ...msg, content: msg.content || msg.ciphertext, status: 'sent' }
+              : m
           );
-          if (exists) {
-            // Update the existing message (replace optimistic with confirmed)
-            return prev.map((m) =>
-              (m._id === msg._id || (m.clientMsgId && m.clientMsgId === msg.clientMsgId))
-                ? { ...msg, content: msg.content || msg.ciphertext, status: 'sent' }
-                : m
-            );
-          }
-          return [...prev, { ...msg, content: msg.content || msg.ciphertext }];
-        });
-      }
+        }
+        return [...prev, { ...msg, content: msg.content || msg.ciphertext }];
+      });
     };
+
+    // Listen to BOTH events — new_message (conv room) + receive_message (user room)
     socket.on('new_message', handler);
-    return () => socket.off('new_message', handler);
+    socket.on('receive_message', handler);
+
+    // CRITICAL: Clean up both listeners to prevent duplicates on re-render
+    return () => {
+      socket.off('new_message', handler);
+      socket.off('receive_message', handler);
+    };
   }, [socket, convId]);
 
   // Send message
@@ -84,10 +106,13 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
     setInput('');
     setSending(true);
 
-    // Optimistic message
+    const clientMsgId = `client_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    // Optimistic message — use current user's ID as sender
     const optimistic = {
       _id: `temp_${Date.now()}`,
-      sender: { _id: user.id || user._id },
+      clientMsgId,
+      sender: { _id: myId },
       content: text,
       ciphertext: text,
       iv: 'none',
@@ -100,10 +125,15 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
       const { data } = await chatAPI.sendMessage(convId, {
         ciphertext: text,
         iv: 'plaintext',
+        clientMsgId,
       });
-      // Replace optimistic with real
+      // Replace optimistic with confirmed server message
       setMessages((prev) =>
-        prev.map((m) => (m._id === optimistic._id ? { ...data.message, content: text, status: 'sent' } : m))
+        prev.map((m) =>
+          m._id === optimistic._id || m.clientMsgId === clientMsgId
+            ? { ...data.message, content: text, status: 'sent' }
+            : m
+        )
       );
     } catch {
       // Mark as failed
@@ -132,8 +162,6 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
     }
   };
 
-  const myId = user?.id || user?._id;
-
   return (
     <div className="chat-window">
       {/* Header */}
@@ -152,7 +180,7 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
         </div>
       </div>
 
-      {/* Post Context Banner — shows when conversation was started from a post */}
+      {/* Post Context Banner */}
       {postCtx?.contentPreview && (
         <div className="chat-post-context" style={{
           padding: '10px 16px', borderBottom: '1px solid var(--border)',
@@ -179,8 +207,17 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
           </div>
         ) : (
           messages.map((msg) => {
-            const senderId = (msg.sender?._id || msg.sender || '').toString();
-            const isOwn = senderId === myId;
+            // Safe sender ID extraction — handles ALL possible formats:
+            // 1. Populated object: { _id: "...", username: "..." }
+            // 2. Raw ObjectId string: "abc123"
+            // 3. Alternative field: msg.senderId
+            const senderIdStr = (
+              msg.sender?._id?.toString() ||
+              (typeof msg.sender === 'string' ? msg.sender : '') ||
+              msg.senderId?.toString() ||
+              ''
+            );
+            const isOwn = senderIdStr === myId;
             return (
               <MessageBubble
                 key={msg._id}

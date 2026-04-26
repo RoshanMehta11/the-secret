@@ -26,7 +26,19 @@ export function SocketProvider({ children, user }) {
 
     const socket = connectSocket(token);
 
-    socket.on('connect', () => setConnected(true));
+    const userId = user.id || user._id;
+
+    socket.on('connect', () => {
+      setConnected(true);
+      // CRITICAL: register this socket with the server so direct messages work
+      socket.emit('register', userId);
+    });
+
+    socket.on('reconnect', () => {
+      // Re-register after reconnection so presence + direct delivery is restored
+      socket.emit('register', userId);
+    });
+
     socket.on('disconnect', () => setConnected(false));
 
     // ── Presence Events ────────────────────────────────

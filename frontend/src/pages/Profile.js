@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { authAPI } from '../utils/api';
-import toast from 'react-hot-toast';
+import { toast } from 'react-toastify';
+import ShareProfileModal from '../components/common/ShareProfileModal';
 import './Profile.css';
 
 const Profile = () => {
   const { user, login } = useAuth();
   const [username, setUsername] = useState(user?.username || '');
   const [saving, setSaving] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -23,6 +25,8 @@ const Profile = () => {
       setSaving(false);
     }
   };
+
+  const userId = user?.id || user?._id;
 
   return (
     <div className="profile-page">
@@ -54,6 +58,25 @@ const Profile = () => {
             <div className="profile-stat text-muted" style={{ fontSize: 12 }}>
               Joined {new Date(user?.createdAt).toLocaleDateString()}
             </div>
+
+            {/* Share Profile Button */}
+            <button
+              onClick={() => setShowShareModal(true)}
+              style={{
+                marginTop: 16,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                width: '100%', padding: '10px 16px',
+                background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                color: 'white', border: 'none', borderRadius: 'var(--radius-md)',
+                fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer',
+                transition: 'all 200ms ease',
+                boxShadow: '0 2px 12px rgba(124,58,237,0.3)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+            >
+              📱 Share Profile
+            </button>
           </div>
 
           <div className="card">
@@ -88,6 +111,15 @@ const Profile = () => {
           </div>
         </div>
       </div>
+
+      {/* Share Profile Modal */}
+      {showShareModal && userId && (
+        <ShareProfileModal
+          userId={userId}
+          username={user?.username || 'User'}
+          onClose={() => setShowShareModal(false)}
+        />
+      )}
     </div>
   );
 };

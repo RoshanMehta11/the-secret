@@ -3,6 +3,7 @@ import { usersAPI } from '../../utils/api';
 import PostCard from '../../components/common/PostCard';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'react-toastify';
+import ShareProfileModal from '../../components/common/ShareProfileModal';
 
 export default function Profile() {
   const { user, loadUser } = useAuth();
@@ -11,6 +12,9 @@ export default function Profile() {
   const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [myPosts, setMyPosts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+
+  const userId = user?.id || user?._id;
 
   useEffect(() => {
     if (user) setProfile({ username: user.username || '', bio: user.bio || '' });
@@ -75,7 +79,24 @@ export default function Profile() {
                 <textarea className="form-input form-textarea" value={profile.bio} onChange={(e) => setProfile((p) => ({ ...p, bio: e.target.value }))} maxLength={160} rows={3} placeholder="Tell us about yourself (optional)" />
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{profile.bio.length}/160</span>
               </div>
-              <button type="submit" className="btn btn-primary">Save Changes</button>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <button type="submit" className="btn btn-primary">Save Changes</button>
+                <button
+                  type="button"
+                  onClick={() => setShowShareModal(true)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    padding: '10px 20px',
+                    background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+                    color: 'white', border: 'none', borderRadius: 'var(--radius-md)',
+                    fontWeight: 600, fontSize: '0.85rem', cursor: 'pointer',
+                    transition: 'all 200ms ease',
+                    boxShadow: '0 2px 12px rgba(124,58,237,0.3)',
+                  }}
+                >
+                  📱 Share Profile
+                </button>
+              </div>
             </form>
           </div>
         )}
@@ -113,6 +134,16 @@ export default function Profile() {
           </div>
         )}
       </div>
+
+      {/* Share Profile Modal */}
+      {showShareModal && userId && (
+        <ShareProfileModal
+          userId={userId}
+          username={user?.username || 'User'}
+          onClose={() => setShowShareModal(false)}
+        />
+      )}
     </div>
   );
 }
+
