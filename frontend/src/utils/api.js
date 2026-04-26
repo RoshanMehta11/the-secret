@@ -153,4 +153,13 @@ export const adminAPI = {
   updateBlocklist: (data) => api.put('/admin/moderation/blocklist', data),
 };
 
+// Chatrooms (ephemeral)
+export const chatroomAPI = {
+  create: (data) => api.post('/chatrooms', data),
+  getPublic: (params) => api.get('/chatrooms/public', { params }),
+  findByCode: (code) => api.get(`/chatrooms/join/${code}`),
+  getRoom: (roomId) => api.get(`/chatrooms/${roomId}`),
+  closeRoom: (roomId) => api.delete(`/chatrooms/${roomId}`),
+};
+
 export default api;

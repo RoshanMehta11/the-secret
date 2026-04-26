@@ -36,6 +36,10 @@ export default function Navbar() {
                 Profile
               </Link>
 
+              <Link to="/chatrooms" className={`btn btn-sm ${isActive('/chatrooms') || location.pathname.startsWith('/chatrooms') ? 'btn-primary' : 'btn-ghost'}`}>
+                🏠 Rooms
+              </Link>
+
               {/* Notification Bell */}
               <div style={{ position: 'relative' }}>
                 <button

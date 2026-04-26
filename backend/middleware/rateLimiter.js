@@ -64,6 +64,33 @@ const apiLimiter = rateLimit({
   },
 });
 
+// ─── Chatroom Rate Limiters ──────────────────────────────────────
+
+// Anti brute-force for private room codes: 10 attempts/min/IP
+const chatroomJoinLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many join attempts. Please try again later.',
+  },
+});
+
+// Room creation: 3 rooms per 10 minutes per user
+const chatroomCreateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many rooms created. Please wait before creating more.',
+  },
+  keyGenerator: (req) => req.user?._id?.toString() || req.ip,
+});
+
 // ─── Socket.IO Rate Limiting ──────────────────────────────────────
 // In-memory tracker for socket events (per socket, not per user)
 const socketRateLimits = new Map();
@@ -102,6 +129,8 @@ module.exports = {
   authLimiter,
   postCreationLimiter,
   apiLimiter,
+  chatroomJoinLimiter,
+  chatroomCreateLimiter,
   checkSocketRateLimit,
   cleanupSocketRateLimit,
 };

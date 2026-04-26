@@ -33,6 +33,7 @@ const { checkSocketRateLimit, cleanupSocketRateLimit } = require('./middleware/r
 const presenceService = require('./services/presenceService');
 const notificationService = require('./services/notificationService');
 const feedScoreService = require('./services/feedScoreService');
+const chatroomService = require('./services/chatroomService');
 const eventBus = require('./services/eventBus');
 // Initialize analytics service (starts listening to events)
 require('./services/analyticsService');
@@ -115,6 +116,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/chatrooms', require('./routes/chatrooms'));
 
 // Health check
 app.get('/api/health', async (_, res) => {
@@ -529,6 +531,167 @@ setInterval(async () => {
   } catch {}
 }, 60000);
 
+// ─── Chatroom Socket.IO Namespace ─────────────────────────────────
+const chatroomNs = io.of('/chatrooms');
+
+// Store namespace reference so REST controllers can access it
+app.set('chatroomNs', chatroomNs);
+
+// Auth middleware (reuse same JWT verification)
+chatroomNs.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (!token) return next(new Error('Authentication required'));
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    socket.userId = decoded.id;
+    next();
+  } catch (err) {
+    next(new Error(err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token'));
+  }
+});
+
+chatroomNs.on('connection', async (socket) => {
+  const userId = socket.userId;
+  console.log(`🏠 Chatroom: user ${userId} connected (socket: ${socket.id})`);
+
+  // ── Reconnect: auto-rejoin active rooms ─────────────────────
+  try {
+    const activeRooms = await redis.smembers(`cr:user_rooms:${userId}`);
+    for (const roomId of activeRooms) {
+      try {
+        const room = await Chatroom.findOne({ roomId }).lean();
+        if (!room || room.expiresAt < new Date() || room.status === 'expired') {
+          await redis.srem(`cr:user_rooms:${userId}`, roomId);
+          continue;
+        }
+        // Re-track this socket for multi-tab
+        await redis.sadd(`cr:room_sockets:${roomId}:${userId}`, socket.id);
+        socket.join(roomId);
+        socket.emit('chatroom:reconnected', { roomId, roomName: room.name });
+      } catch {}
+    }
+  } catch {}
+
+  // ── Join Room ───────────────────────────────────────────────
+  socket.on('chatroom:join', async ({ roomId }) => {
+    if (checkSocketRateLimit(socket.id, 10, 60000)) {
+      return socket.emit('chatroom:error', { code: 'RATE_LIMITED', roomId });
+    }
+    try {
+      const { room, nickname, isNewParticipant } = await chatroomService.joinRoom(userId, roomId, socket.id);
+      socket.join(roomId);
+
+      // Send recent messages for late-joiner catch-up
+      const recentMsgs = await chatroomService.getRecentMessages(roomId, 50);
+      socket.emit('chatroom:history', { roomId, messages: recentMsgs });
+
+      // Broadcast join only for new participants (not multi-tab reconnects)
+      if (isNewParticipant) {
+        const count = await chatroomService.getParticipantCount(roomId);
+        chatroomNs.to(roomId).emit('chatroom:user_joined', {
+          userId, displayName: nickname, participantCount: count,
+        });
+      }
+    } catch (err) {
+      socket.emit('chatroom:error', { code: err.message, roomId });
+    }
+  });
+
+  // ── Leave Room ──────────────────────────────────────────────
+  socket.on('chatroom:leave', async ({ roomId }) => {
+    try {
+      socket.leave(roomId);
+      const nickname = await chatroomService.getNickname(roomId, userId);
+      const fullyLeft = await chatroomService.handleSocketDisconnect(userId, roomId, socket.id);
+      if (fullyLeft) {
+        const count = await chatroomService.getParticipantCount(roomId);
+        chatroomNs.to(roomId).emit('chatroom:user_left', {
+          userId, displayName: nickname, participantCount: count,
+        });
+      }
+    } catch {}
+  });
+
+  // ── Send Message (at-most-once delivery) ────────────────────
+  socket.on('chatroom:send_message', async ({ roomId, text }) => {
+    // Per-room rate limiting: 30 msgs/min per (socket, room)
+    if (checkSocketRateLimit(`${socket.id}:msg:${roomId}`, 30, 60000)) {
+      return socket.emit('chatroom:error', { code: 'RATE_LIMITED', roomId });
+    }
+
+    if (!text || typeof text !== 'string') return;
+    const sanitized = text.trim().replace(/<[^>]*>/g, '').substring(0, 500);
+    if (!sanitized) return;
+
+    try {
+      // Atomic sequence ID for deterministic ordering
+      const seqId = await chatroomService.getNextSeqId(roomId);
+      const senderName = await chatroomService.getNickname(roomId, userId);
+
+      const message = {
+        id: uuidv4(),
+        seqId,
+        text: sanitized,
+        senderId: userId,
+        senderName,
+        timestamp: Date.now(),
+        roomId,
+      };
+
+      // Buffer for late-joiners (not persistence)
+      await chatroomService.storeMessage(roomId, message);
+
+      // Update room activity
+      await Chatroom.updateOne({ roomId }, { lastActivity: new Date(), status: 'active' });
+
+      // Broadcast — at-most-once, no ack/retry
+      chatroomNs.to(roomId).emit('chatroom:message', message);
+    } catch (err) {
+      console.error('chatroom:send_message error:', err.message);
+    }
+  });
+
+  // ── Typing Indicator ────────────────────────────────────────
+  socket.on('chatroom:typing', async ({ roomId, isTyping }) => {
+    if (checkSocketRateLimit(`${socket.id}:typing`, 20, 60000)) return;
+    try {
+      const displayName = await chatroomService.getNickname(roomId, userId);
+      socket.to(roomId).emit('chatroom:typing', { userId, displayName, isTyping });
+    } catch {}
+  });
+
+  // ── Disconnect (participant cleanup) ─────────────────────────
+  socket.on('disconnect', async () => {
+    console.log(`🏠 Chatroom: user ${userId} disconnected (socket: ${socket.id})`);
+    try {
+      const userRooms = await redis.smembers(`cr:user_rooms:${userId}`);
+      for (const roomId of userRooms) {
+        try {
+          const nickname = await chatroomService.getNickname(roomId, userId);
+          const fullyLeft = await chatroomService.handleSocketDisconnect(userId, roomId, socket.id);
+          if (fullyLeft) {
+            const count = await chatroomService.getParticipantCount(roomId);
+            chatroomNs.to(roomId).emit('chatroom:user_left', {
+              userId, displayName: nickname, participantCount: count,
+            });
+          }
+        } catch {}
+      }
+    } catch {}
+    cleanupSocketRateLimit(socket.id);
+  });
+});
+
+// Chatroom Model (needed for namespace handler queries)
+const Chatroom = require('./models/Chatroom');
+
+// Chatroom cleanup (every 60s)
+setInterval(async () => {
+  try {
+    await chatroomService.cleanupExpiredRooms(chatroomNs);
+  } catch {}
+}, 60000);
+
 // Feed score recalculation (every 5 minutes)
 setInterval(async () => {
   try {
@@ -567,6 +730,7 @@ server.listen(PORT, () => {
   console.log(`📋 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔐 Security: Helmet + CORS + Sanitize + Rate Limiting`);
   console.log(`📡 Real-time: Socket.IO with Redis adapter`);
+  console.log(`🏠 Chatrooms: Ephemeral rooms with at-most-once delivery`);
   console.log(`🤖 Moderation: Hybrid sync + async pipeline`);
   console.log(`📊 Feed: Smart ranking with engagement scoring\n`);
 });

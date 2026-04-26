@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { ChatProvider } from './context/ChatContext';
+import { ChatroomProvider } from './context/ChatroomContext';
 import Navbar from './components/common/Navbar';
 import ChatFloat from './components/chat/ChatFloat';
 import NotifToast from './components/notifications/NotifToast';
@@ -24,6 +25,8 @@ import AdminPosts from './pages/admin/Posts';
 import AdminReports from './pages/admin/Reports';
 import Moderation from './pages/admin/Moderation';
 import Analytics from './pages/admin/Analytics';
+import Chatrooms from './pages/Chatrooms';
+import ChatroomUI from './components/chatrooms/ChatroomUI';
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -38,6 +41,7 @@ function AppContent() {
     <SocketProvider user={user}>
       <ThemeProvider>
         <ChatProvider>
+        <ChatroomProvider>
         <Navbar />
         <Routes>
           <Route path="/" element={<Home />} />
@@ -53,12 +57,15 @@ function AppContent() {
             <Route path="moderation" element={<Moderation />} />
             <Route path="analytics" element={<Analytics />} />
           </Route>
+          <Route path="/chatrooms" element={<ProtectedRoute><Chatrooms /></ProtectedRoute>} />
+          <Route path="/chatrooms/:roomId" element={<ProtectedRoute><ChatroomUI /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
 
         {/* Floating systems — always present */}
         <ChatFloat />
         <NotifToast />
+        </ChatroomProvider>
         </ChatProvider>
       </ThemeProvider>
     </SocketProvider>
