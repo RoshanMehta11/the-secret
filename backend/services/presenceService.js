@@ -1,10 +1,13 @@
-const { redis } = require('../config/redis');
+const { redis, isRedisAvailable } = require('../config/redis');
 
 // ─── Presence Service ─────────────────────────────────────────────
 // Manages online user presence using Redis data structures:
 //   - Sorted Set `presence:online` → {userId: lastHeartbeat}
 //   - Hash `user:sessions:{userId}` → {socketId: metadata}
 //   - String `user:last_seen:{userId}` → ISO timestamp (TTL 30d)
+//
+// GRACEFUL DEGRADATION: All methods return safe defaults when Redis
+// is unavailable, so the server never crashes.
 
 const KEYS = {
   ONLINE: 'presence:online',
@@ -26,28 +29,33 @@ class PresenceService {
    * @returns {boolean} wasAlreadyOnline — true if user had existing sessions
    */
   async connect(userId, socketId, metadata = {}) {
-    const sessionKey = KEYS.SESSION(userId);
-    const sessionData = JSON.stringify({
-      ...metadata,
-      connectedAt: new Date().toISOString(),
-    });
+    try {
+      const sessionKey = KEYS.SESSION(userId);
+      const sessionData = JSON.stringify({
+        ...metadata,
+        connectedAt: new Date().toISOString(),
+      });
 
-    const pipeline = redis.pipeline();
+      const pipeline = redis.pipeline();
 
-    // Add socket to user's session hash
-    pipeline.hset(sessionKey, socketId, sessionData);
+      // Add socket to user's session hash
+      pipeline.hset(sessionKey, socketId, sessionData);
 
-    // Update presence sorted set with current timestamp
-    pipeline.zadd(KEYS.ONLINE, Date.now(), userId);
+      // Update presence sorted set with current timestamp
+      pipeline.zadd(KEYS.ONLINE, Date.now(), userId);
 
-    // Remove last_seen (user is now online)
-    pipeline.del(KEYS.LAST_SEEN(userId));
+      // Remove last_seen (user is now online)
+      pipeline.del(KEYS.LAST_SEEN(userId));
 
-    await pipeline.exec();
+      await pipeline.exec();
 
-    // Check if this is a new online event (user had no prior sessions)
-    const sessionCount = await redis.hlen(sessionKey);
-    return sessionCount > 1; // true = was already online
+      // Check if this is a new online event (user had no prior sessions)
+      const sessionCount = await redis.hlen(sessionKey);
+      return sessionCount > 1; // true = was already online
+    } catch (err) {
+      console.warn('PresenceService.connect error:', err.message);
+      return false;
+    }
   }
 
   /**
@@ -57,25 +65,30 @@ class PresenceService {
    * @returns {boolean} isFullyOffline — true if no more sessions remain
    */
   async disconnect(userId, socketId) {
-    const sessionKey = KEYS.SESSION(userId);
+    try {
+      const sessionKey = KEYS.SESSION(userId);
 
-    // Remove this socket from user's sessions
-    await redis.hdel(sessionKey, socketId);
+      // Remove this socket from user's sessions
+      await redis.hdel(sessionKey, socketId);
 
-    // Check remaining sessions
-    const remaining = await redis.hlen(sessionKey);
+      // Check remaining sessions
+      const remaining = await redis.hlen(sessionKey);
 
-    if (remaining === 0) {
-      // User is truly offline
-      const pipeline = redis.pipeline();
-      pipeline.zrem(KEYS.ONLINE, userId);
-      pipeline.set(KEYS.LAST_SEEN(userId), new Date().toISOString(), 'EX', LAST_SEEN_TTL);
-      pipeline.del(sessionKey);
-      await pipeline.exec();
-      return true; // Fully offline
+      if (remaining === 0) {
+        // User is truly offline
+        const pipeline = redis.pipeline();
+        pipeline.zrem(KEYS.ONLINE, userId);
+        pipeline.set(KEYS.LAST_SEEN(userId), new Date().toISOString(), 'EX', LAST_SEEN_TTL);
+        pipeline.del(sessionKey);
+        await pipeline.exec();
+        return true; // Fully offline
+      }
+
+      return false; // Still has other sessions
+    } catch (err) {
+      console.warn('PresenceService.disconnect error:', err.message);
+      return true; // Assume offline on error
     }
-
-    return false; // Still has other sessions
   }
 
   /**
@@ -83,7 +96,9 @@ class PresenceService {
    * @param {string} userId
    */
   async heartbeat(userId) {
-    await redis.zadd(KEYS.ONLINE, Date.now(), userId);
+    try {
+      await redis.zadd(KEYS.ONLINE, Date.now(), userId);
+    } catch {}
   }
 
   /**
@@ -92,8 +107,12 @@ class PresenceService {
    * @returns {boolean}
    */
   async isOnline(userId) {
-    const score = await redis.zscore(KEYS.ONLINE, userId);
-    return score !== null;
+    try {
+      const score = await redis.zscore(KEYS.ONLINE, userId);
+      return score !== null;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -103,23 +122,30 @@ class PresenceService {
    */
   async getPresenceBatch(userIds) {
     const result = {};
-    const pipeline = redis.pipeline();
+    try {
+      const pipeline = redis.pipeline();
 
-    for (const uid of userIds) {
-      pipeline.zscore(KEYS.ONLINE, uid);
-      pipeline.get(KEYS.LAST_SEEN(uid));
-    }
+      for (const uid of userIds) {
+        pipeline.zscore(KEYS.ONLINE, uid);
+        pipeline.get(KEYS.LAST_SEEN(uid));
+      }
 
-    const responses = await pipeline.exec();
+      const responses = await pipeline.exec();
 
-    for (let i = 0; i < userIds.length; i++) {
-      const onlineScore = responses[i * 2]?.[1];
-      const lastSeen = responses[i * 2 + 1]?.[1];
+      for (let i = 0; i < userIds.length; i++) {
+        const onlineScore = responses[i * 2]?.[1];
+        const lastSeen = responses[i * 2 + 1]?.[1];
 
-      result[userIds[i]] = {
-        online: onlineScore !== null,
-        lastSeen: lastSeen || null,
-      };
+        result[userIds[i]] = {
+          online: onlineScore !== null,
+          lastSeen: lastSeen || null,
+        };
+      }
+    } catch {
+      // Return all offline on error
+      for (const uid of userIds) {
+        result[uid] = { online: false, lastSeen: null };
+      }
     }
 
     return result;
@@ -130,7 +156,11 @@ class PresenceService {
    * @returns {string[]}
    */
   async getOnlineUsers() {
-    return await redis.zrange(KEYS.ONLINE, 0, -1);
+    try {
+      return await redis.zrange(KEYS.ONLINE, 0, -1);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -139,7 +169,11 @@ class PresenceService {
    * @returns {number}
    */
   async getDeviceCount(userId) {
-    return await redis.hlen(KEYS.SESSION(userId));
+    try {
+      return await redis.hlen(KEYS.SESSION(userId));
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -147,25 +181,29 @@ class PresenceService {
    * Should be called by a periodic job (every 60s)
    */
   async cleanupStale() {
-    // Distributed lock to prevent multiple processes running cleanup
-    const lockAcquired = await redis.set(KEYS.STALE_LOCK, '1', 'EX', 55, 'NX');
-    if (!lockAcquired) return [];
+    try {
+      // Distributed lock to prevent multiple processes running cleanup
+      const lockAcquired = await redis.set(KEYS.STALE_LOCK, '1', 'EX', 55, 'NX');
+      if (!lockAcquired) return [];
 
-    const threshold = Date.now() - STALE_THRESHOLD;
-    const staleUserIds = await redis.zrangebyscore(KEYS.ONLINE, '-inf', threshold);
+      const threshold = Date.now() - STALE_THRESHOLD;
+      const staleUserIds = await redis.zrangebyscore(KEYS.ONLINE, '-inf', threshold);
 
-    if (staleUserIds.length === 0) return [];
+      if (staleUserIds.length === 0) return [];
 
-    const pipeline = redis.pipeline();
-    for (const userId of staleUserIds) {
-      pipeline.zrem(KEYS.ONLINE, userId);
-      pipeline.del(KEYS.SESSION(userId));
-      pipeline.set(KEYS.LAST_SEEN(userId), new Date().toISOString(), 'EX', LAST_SEEN_TTL);
+      const pipeline = redis.pipeline();
+      for (const userId of staleUserIds) {
+        pipeline.zrem(KEYS.ONLINE, userId);
+        pipeline.del(KEYS.SESSION(userId));
+        pipeline.set(KEYS.LAST_SEEN(userId), new Date().toISOString(), 'EX', LAST_SEEN_TTL);
+      }
+      await pipeline.exec();
+
+      console.log(`🧹 Cleaned ${staleUserIds.length} stale presence entries`);
+      return staleUserIds;
+    } catch {
+      return [];
     }
-    await pipeline.exec();
-
-    console.log(`🧹 Cleaned ${staleUserIds.length} stale presence entries`);
-    return staleUserIds;
   }
 
   /**
@@ -173,7 +211,11 @@ class PresenceService {
    * @returns {number}
    */
   async getOnlineCount() {
-    return await redis.zcard(KEYS.ONLINE);
+    try {
+      return await redis.zcard(KEYS.ONLINE);
+    } catch {
+      return 0;
+    }
   }
 }
 

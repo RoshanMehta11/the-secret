@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const Chatroom = require('../models/Chatroom');
-const { redis } = require('../config/redis');
+const { redis, isRedisAvailable } = require('../config/redis');
 
 // ─── Chatroom Service ─────────────────────────────────────────────
 // Core business logic for ephemeral chatrooms.
@@ -39,22 +39,36 @@ function generateAnonName() {
 class ChatroomService {
   constructor() {
     this.redisAvailable = false;
-    this._devMessageStore = process.env.NODE_ENV === 'development' ? new Map() : null;
+    this._devMessageStore = new Map(); // Fallback in-memory store
 
-    redis.ping()
-      .then(() => { this.redisAvailable = true; })
-      .catch(() => {});
-    redis.on('connect', () => { this.redisAvailable = true; });
-    redis.on('error', () => { this.redisAvailable = false; });
+    // Check Redis availability asynchronously
+    this._checkRedis();
+  }
+
+  async _checkRedis() {
+    try {
+      await redis.ping();
+      this.redisAvailable = true;
+    } catch {
+      this.redisAvailable = false;
+    }
+
+    // Listen for connection state changes (only if real Redis client)
+    if (typeof redis.on === 'function' && isRedisAvailable) {
+      try {
+        redis.on('connect', () => { this.redisAvailable = true; });
+        redis.on('error', () => { this.redisAvailable = false; });
+      } catch {}
+    }
+  }
+
+  _isRedisUp() {
+    return this.redisAvailable || isRedisAvailable();
   }
 
   // ── Room CRUD ──────────────────────────────────────────────────
 
   async createRoom(userId, { name, type, maxParticipants = 50 }) {
-    if (!this.redisAvailable && !this._devMessageStore) {
-      throw new Error('REDIS_UNAVAILABLE');
-    }
-
     const roomId = uuidv4();
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
@@ -72,17 +86,21 @@ class ChatroomService {
     });
 
     // Pre-set TTLs so keys auto-expire even if cleanup cron misses them
-    const ttl = 24 * 60 * 60;
-    if (this.redisAvailable) {
-      const pipe = redis.pipeline();
-      // Create empty keys so EXPIRE works
-      pipe.sadd(`cr:participants:${roomId}`, '__init__');
-      pipe.srem(`cr:participants:${roomId}`, '__init__');
-      pipe.expire(`cr:participants:${roomId}`, ttl);
-      pipe.expire(`cr:nicknames:${roomId}`, ttl);
-      pipe.expire(`cr:seq:${roomId}`, ttl);
-      pipe.expire(`cr:msgs:${roomId}`, ttl);
-      await pipe.exec();
+    if (this._isRedisUp()) {
+      try {
+        const ttl = 24 * 60 * 60;
+        const pipe = redis.pipeline();
+        // Create empty keys so EXPIRE works
+        pipe.sadd(`cr:participants:${roomId}`, '__init__');
+        pipe.srem(`cr:participants:${roomId}`, '__init__');
+        pipe.expire(`cr:participants:${roomId}`, ttl);
+        pipe.expire(`cr:nicknames:${roomId}`, ttl);
+        pipe.expire(`cr:seq:${roomId}`, ttl);
+        pipe.expire(`cr:msgs:${roomId}`, ttl);
+        await pipe.exec();
+      } catch (err) {
+        console.warn('createRoom Redis setup error:', err.message);
+      }
     }
 
     return room.toObject();
@@ -91,10 +109,22 @@ class ChatroomService {
   // ── Code Generation (atomic via Redis SET NX) ──────────────────
 
   async generateUniqueCode(roomId) {
+    if (this._isRedisUp()) {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        try {
+          const reserved = await redis.set(`cr:code:${code}`, roomId, 'EX', 86400, 'NX');
+          if (reserved) return code;
+        } catch {
+          break; // Redis failed, fall through to MongoDB check
+        }
+      }
+    }
+    // Fallback: generate code and check MongoDB for uniqueness
     for (let attempt = 0; attempt < 20; attempt++) {
       const code = String(Math.floor(100000 + Math.random() * 900000));
-      const reserved = await redis.set(`cr:code:${code}`, roomId, 'EX', 86400, 'NX');
-      if (reserved) return code;
+      const existing = await Chatroom.findOne({ code, expiresAt: { $gt: new Date() } });
+      if (!existing) return code;
     }
     throw new Error('CODE_GENERATION_FAILED');
   }
@@ -112,29 +142,42 @@ class ChatroomService {
       throw new Error('ROOM_EXPIRED');
     }
 
-    // Gate 3: capacity (skip if user already in room — multi-tab)
-    const isAlreadyIn = await redis.sismember(`cr:participants:${roomId}`, userId);
-    if (!isAlreadyIn) {
-      const count = await redis.scard(`cr:participants:${roomId}`);
-      if (count >= room.maxParticipants) throw new Error('ROOM_FULL');
-    }
+    let isAlreadyIn = false;
+    let nickname;
 
-    // Generate nickname if first join
-    let nickname = await redis.hget(`cr:nicknames:${roomId}`, userId);
-    if (!nickname) {
+    if (this._isRedisUp()) {
+      try {
+        // Gate 3: capacity (skip if user already in room — multi-tab)
+        isAlreadyIn = !!(await redis.sismember(`cr:participants:${roomId}`, userId));
+        if (!isAlreadyIn) {
+          const count = await redis.scard(`cr:participants:${roomId}`);
+          if (count >= room.maxParticipants) throw new Error('ROOM_FULL');
+        }
+
+        // Generate nickname if first join
+        nickname = await redis.hget(`cr:nicknames:${roomId}`, userId);
+        if (!nickname) {
+          nickname = generateAnonName();
+          await redis.hset(`cr:nicknames:${roomId}`, userId, nickname);
+        }
+
+        // Add participant + track socket + reverse index (pipeline)
+        const pipe = redis.pipeline();
+        pipe.sadd(`cr:participants:${roomId}`, userId);
+        pipe.sadd(`cr:room_sockets:${roomId}:${userId}`, socketId);
+        pipe.sadd(`cr:user_rooms:${userId}`, roomId);
+        // Refresh TTL on reverse index
+        pipe.expire(`cr:user_rooms:${userId}`, 24 * 60 * 60);
+        pipe.expire(`cr:room_sockets:${roomId}:${userId}`, 24 * 60 * 60);
+        await pipe.exec();
+      } catch (err) {
+        if (['ROOM_FULL', 'ROOM_NOT_FOUND', 'ROOM_EXPIRED'].includes(err.message)) throw err;
+        console.warn('joinRoom Redis error:', err.message);
+        nickname = nickname || generateAnonName();
+      }
+    } else {
       nickname = generateAnonName();
-      await redis.hset(`cr:nicknames:${roomId}`, userId, nickname);
     }
-
-    // Add participant + track socket + reverse index (pipeline)
-    const pipe = redis.pipeline();
-    pipe.sadd(`cr:participants:${roomId}`, userId);
-    pipe.sadd(`cr:room_sockets:${roomId}:${userId}`, socketId);
-    pipe.sadd(`cr:user_rooms:${userId}`, roomId);
-    // Refresh TTL on reverse index
-    pipe.expire(`cr:user_rooms:${userId}`, 24 * 60 * 60);
-    pipe.expire(`cr:room_sockets:${roomId}:${userId}`, 24 * 60 * 60);
-    await pipe.exec();
 
     // Transition room status
     if (room.status === 'created' || room.status === 'idle') {
@@ -145,77 +188,108 @@ class ChatroomService {
   }
 
   async leaveRoom(userId, roomId) {
-    const pipe = redis.pipeline();
-    pipe.srem(`cr:participants:${roomId}`, userId);
-    pipe.hdel(`cr:nicknames:${roomId}`, userId);
-    pipe.srem(`cr:user_rooms:${userId}`, roomId);
-    pipe.del(`cr:room_sockets:${roomId}:${userId}`);
-    await pipe.exec();
+    try {
+      const pipe = redis.pipeline();
+      pipe.srem(`cr:participants:${roomId}`, userId);
+      pipe.hdel(`cr:nicknames:${roomId}`, userId);
+      pipe.srem(`cr:user_rooms:${userId}`, roomId);
+      pipe.del(`cr:room_sockets:${roomId}:${userId}`);
+      await pipe.exec();
 
-    // If room now empty, mark expired
-    const remaining = await redis.scard(`cr:participants:${roomId}`);
-    if (remaining === 0) {
+      // If room now empty, mark expired
+      const remaining = await redis.scard(`cr:participants:${roomId}`);
+      if (remaining === 0) {
+        await Chatroom.updateOne({ roomId }, { status: 'expired' });
+      }
+    } catch {
+      // Redis unavailable — mark room expired as fallback
       await Chatroom.updateOne({ roomId }, { status: 'expired' });
     }
   }
 
   // Multi-tab: remove one socket, fully leave only when 0 sockets remain
   async handleSocketDisconnect(userId, roomId, socketId) {
-    await redis.srem(`cr:room_sockets:${roomId}:${userId}`, socketId);
-    const remaining = await redis.scard(`cr:room_sockets:${roomId}:${userId}`);
+    try {
+      await redis.srem(`cr:room_sockets:${roomId}:${userId}`, socketId);
+      const remaining = await redis.scard(`cr:room_sockets:${roomId}:${userId}`);
 
-    if (remaining === 0) {
-      // All tabs closed — fully leave
-      await this.leaveRoom(userId, roomId);
-      return true; // user fully left
+      if (remaining === 0) {
+        // All tabs closed — fully leave
+        await this.leaveRoom(userId, roomId);
+        return true; // user fully left
+      }
+      return false; // still has other tabs
+    } catch {
+      // Redis unavailable — assume fully left
+      return true;
     }
-    return false; // still has other tabs
   }
 
   // ── Messages (ephemeral buffer, AT-MOST-ONCE) ─────────────────
 
   async storeMessage(roomId, message) {
-    if (this.redisAvailable) {
-      const pipe = redis.pipeline();
-      pipe.rpush(`cr:msgs:${roomId}`, JSON.stringify(message));
-      pipe.ltrim(`cr:msgs:${roomId}`, -200, -1);
-      await pipe.exec();
-    } else if (this._devMessageStore) {
-      if (!this._devMessageStore.has(roomId)) this._devMessageStore.set(roomId, []);
-      const msgs = this._devMessageStore.get(roomId);
-      msgs.push(message);
-      if (msgs.length > 200) msgs.splice(0, msgs.length - 200);
-    } else {
-      throw new Error('REDIS_UNAVAILABLE');
+    if (this._isRedisUp()) {
+      try {
+        const pipe = redis.pipeline();
+        pipe.rpush(`cr:msgs:${roomId}`, JSON.stringify(message));
+        pipe.ltrim(`cr:msgs:${roomId}`, -200, -1);
+        await pipe.exec();
+        return;
+      } catch {
+        // Fall through to in-memory
+      }
     }
+    // In-memory fallback
+    if (!this._devMessageStore.has(roomId)) this._devMessageStore.set(roomId, []);
+    const msgs = this._devMessageStore.get(roomId);
+    msgs.push(message);
+    if (msgs.length > 200) msgs.splice(0, msgs.length - 200);
   }
 
   async getRecentMessages(roomId, count = 50) {
-    if (this.redisAvailable) {
-      const raw = await redis.lrange(`cr:msgs:${roomId}`, -count, -1);
-      return raw.map((r) => JSON.parse(r));
-    } else if (this._devMessageStore) {
-      return (this._devMessageStore.get(roomId) || []).slice(-count);
+    if (this._isRedisUp()) {
+      try {
+        const raw = await redis.lrange(`cr:msgs:${roomId}`, -count, -1);
+        return raw.map((r) => JSON.parse(r));
+      } catch {}
     }
-    return [];
+    // In-memory fallback
+    return (this._devMessageStore.get(roomId) || []).slice(-count);
   }
 
   async getNextSeqId(roomId) {
-    return await redis.incr(`cr:seq:${roomId}`);
+    try {
+      return await redis.incr(`cr:seq:${roomId}`);
+    } catch {
+      // Fallback: timestamp-based sequence
+      return Date.now();
+    }
   }
 
   // ── Queries ────────────────────────────────────────────────────
 
   async getParticipantCount(roomId) {
-    return await redis.scard(`cr:participants:${roomId}`);
+    try {
+      return await redis.scard(`cr:participants:${roomId}`);
+    } catch {
+      return 0;
+    }
   }
 
   async getParticipants(roomId) {
-    return await redis.smembers(`cr:participants:${roomId}`);
+    try {
+      return await redis.smembers(`cr:participants:${roomId}`);
+    } catch {
+      return [];
+    }
   }
 
   async getNickname(roomId, userId) {
-    return (await redis.hget(`cr:nicknames:${roomId}`, userId)) || 'Anonymous';
+    try {
+      return (await redis.hget(`cr:nicknames:${roomId}`, userId)) || 'Anonymous';
+    } catch {
+      return 'Anonymous';
+    }
   }
 
   async getPublicRooms(page = 1, limit = 12) {
@@ -232,24 +306,30 @@ class ChatroomService {
     ]);
 
     // Enrich with live Redis participant counts
-    if (this.redisAvailable) {
-      const pipe = redis.pipeline();
-      rooms.forEach((r) => pipe.scard(`cr:participants:${r.roomId}`));
-      const results = await pipe.exec();
-      rooms.forEach((r, i) => { r.participantCount = results[i]?.[1] || 0; });
+    if (this._isRedisUp()) {
+      try {
+        const pipe = redis.pipeline();
+        rooms.forEach((r) => pipe.scard(`cr:participants:${r.roomId}`));
+        const results = await pipe.exec();
+        rooms.forEach((r, i) => { r.participantCount = results[i]?.[1] || 0; });
+      } catch {}
+    } else {
+      rooms.forEach((r) => { r.participantCount = 0; });
     }
 
     return { rooms, total, page, totalPages: Math.ceil(total / limit) };
   }
 
   async findByCode(code) {
-    if (this.redisAvailable) {
-      const roomId = await redis.get(`cr:code:${code}`);
-      if (!roomId) return null;
-      const room = await Chatroom.findOne({ roomId }).lean();
-      if (!room || room.expiresAt < new Date()) return null;
-      room.participantCount = await redis.scard(`cr:participants:${roomId}`);
-      return room;
+    if (this._isRedisUp()) {
+      try {
+        const roomId = await redis.get(`cr:code:${code}`);
+        if (!roomId) return null;
+        const room = await Chatroom.findOne({ roomId }).lean();
+        if (!room || room.expiresAt < new Date()) return null;
+        room.participantCount = await redis.scard(`cr:participants:${roomId}`);
+        return room;
+      } catch {}
     }
     // Fallback: direct MongoDB lookup
     const room = await Chatroom.findOne({ code, expiresAt: { $gt: new Date() } }).lean();
@@ -287,20 +367,25 @@ class ChatroomService {
         }
 
         // 2. Get participants for reverse-index cleanup
-        const participants = await redis.smembers(`cr:participants:${room.roomId}`);
+        let participants = [];
+        try {
+          participants = await redis.smembers(`cr:participants:${room.roomId}`);
+        } catch {}
 
         // 3. Pipeline delete ALL Redis keys for this room
-        const pipe = redis.pipeline();
-        pipe.del(`cr:msgs:${room.roomId}`);
-        pipe.del(`cr:participants:${room.roomId}`);
-        pipe.del(`cr:nicknames:${room.roomId}`);
-        pipe.del(`cr:seq:${room.roomId}`);
-        if (room.code) pipe.del(`cr:code:${room.code}`);
-        for (const uid of participants) {
-          pipe.srem(`cr:user_rooms:${uid}`, room.roomId);
-          pipe.del(`cr:room_sockets:${room.roomId}:${uid}`);
-        }
-        await pipe.exec();
+        try {
+          const pipe = redis.pipeline();
+          pipe.del(`cr:msgs:${room.roomId}`);
+          pipe.del(`cr:participants:${room.roomId}`);
+          pipe.del(`cr:nicknames:${room.roomId}`);
+          pipe.del(`cr:seq:${room.roomId}`);
+          if (room.code) pipe.del(`cr:code:${room.code}`);
+          for (const uid of participants) {
+            pipe.srem(`cr:user_rooms:${uid}`, room.roomId);
+            pipe.del(`cr:room_sockets:${room.roomId}:${uid}`);
+          }
+          await pipe.exec();
+        } catch {}
 
         // 4. Delete MongoDB doc
         await Chatroom.deleteOne({ _id: room._id });
@@ -329,18 +414,20 @@ class ChatroomService {
     }
 
     // Cleanup Redis
-    const participants = await redis.smembers(`cr:participants:${roomId}`);
-    const pipe = redis.pipeline();
-    pipe.del(`cr:msgs:${roomId}`);
-    pipe.del(`cr:participants:${roomId}`);
-    pipe.del(`cr:nicknames:${roomId}`);
-    pipe.del(`cr:seq:${roomId}`);
-    if (room.code) pipe.del(`cr:code:${room.code}`);
-    for (const uid of participants) {
-      pipe.srem(`cr:user_rooms:${uid}`, roomId);
-      pipe.del(`cr:room_sockets:${roomId}:${uid}`);
-    }
-    await pipe.exec();
+    try {
+      const participants = await redis.smembers(`cr:participants:${roomId}`);
+      const pipe = redis.pipeline();
+      pipe.del(`cr:msgs:${roomId}`);
+      pipe.del(`cr:participants:${roomId}`);
+      pipe.del(`cr:nicknames:${roomId}`);
+      pipe.del(`cr:seq:${roomId}`);
+      if (room.code) pipe.del(`cr:code:${room.code}`);
+      for (const uid of participants) {
+        pipe.srem(`cr:user_rooms:${uid}`, roomId);
+        pipe.del(`cr:room_sockets:${roomId}:${uid}`);
+      }
+      await pipe.exec();
+    } catch {}
 
     await Chatroom.deleteOne({ _id: room._id });
   }

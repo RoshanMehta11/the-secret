@@ -5,6 +5,9 @@ const eventBus = require('./eventBus');
 // ─── Notification Service ─────────────────────────────────────────
 // Handles notification creation, batching, rate control, and delivery.
 // Consumes events from the EventBus and produces socket + persisted notifications.
+//
+// GRACEFUL DEGRADATION: When Redis is unavailable, skips batching/rate-limiting
+// and delivers notifications directly.
 
 const KEYS = {
   UNREAD_COUNT: (userId) => `notif:unread:${userId}`,
@@ -157,67 +160,84 @@ class NotificationService {
     const dedupKey = KEYS.DEDUP(type, targetId, actor.userId);
 
     // Deduplication: has this actor already triggered this notification?
-    const alreadyNotified = await redis.get(dedupKey);
-    if (alreadyNotified) return;
+    try {
+      const alreadyNotified = await redis.get(dedupKey);
+      if (alreadyNotified) return;
 
-    // Mark as notified (1h TTL)
-    await redis.set(dedupKey, '1', 'EX', 3600);
+      // Mark as notified (1h TTL)
+      await redis.set(dedupKey, '1', 'EX', 3600);
 
-    // Get existing batch
-    const existingBatch = await redis.get(batchKey);
-    let batch;
+      // Get existing batch
+      const existingBatch = await redis.get(batchKey);
+      let batch;
 
-    if (existingBatch) {
-      batch = JSON.parse(existingBatch);
-      batch.actorCount += 1;
-      if (batch.actors.length < MAX_ACTORS_STORED) {
-        batch.actors.push(actor);
+      if (existingBatch) {
+        batch = JSON.parse(existingBatch);
+        batch.actorCount += 1;
+        if (batch.actors.length < MAX_ACTORS_STORED) {
+          batch.actors.push(actor);
+        }
+      } else {
+        batch = {
+          recipient,
+          type,
+          targetType,
+          targetId,
+          actors: [actor],
+          actorCount: 1,
+        };
       }
-    } else {
-      batch = {
-        recipient,
+
+      // Store batch with 5s TTL
+      await redis.set(batchKey, JSON.stringify(batch), 'PX', BATCH_WINDOW_MS);
+
+      // Set flush timer (only if new batch)
+      const timerKey = `${recipient}:${type}:${targetId}`;
+      if (!this.batchTimers.has(timerKey)) {
+        const timer = setTimeout(async () => {
+          this.batchTimers.delete(timerKey);
+          await this._flushBatch(batchKey, recipient, type, targetId);
+        }, BATCH_WINDOW_MS);
+        this.batchTimers.set(timerKey, timer);
+      }
+    } catch {
+      // Redis unavailable — skip batching, create notification directly
+      const { title, body } = this._generateText({
         type,
-        targetType,
-        targetId,
         actors: [actor],
         actorCount: 1,
-      };
-    }
-
-    // Store batch with 5s TTL
-    await redis.set(batchKey, JSON.stringify(batch), 'PX', BATCH_WINDOW_MS);
-
-    // Set flush timer (only if new batch)
-    const timerKey = `${recipient}:${type}:${targetId}`;
-    if (!this.batchTimers.has(timerKey)) {
-      const timer = setTimeout(async () => {
-        this.batchTimers.delete(timerKey);
-        await this._flushBatch(batchKey, recipient, type, targetId);
-      }, BATCH_WINDOW_MS);
-      this.batchTimers.set(timerKey, timer);
+      });
+      await this._createNotification({
+        recipient, type, targetType, targetId,
+        title, body, actors: [actor], actorCount: 1,
+      });
     }
   }
 
   async _flushBatch(batchKey, recipient, type, targetId) {
-    const batchData = await redis.get(batchKey);
-    if (!batchData) return;
+    try {
+      const batchData = await redis.get(batchKey);
+      if (!batchData) return;
 
-    const batch = JSON.parse(batchData);
-    await redis.del(batchKey);
+      const batch = JSON.parse(batchData);
+      await redis.del(batchKey);
 
-    // Generate human-readable text
-    const { title, body } = this._generateText(batch);
+      // Generate human-readable text
+      const { title, body } = this._generateText(batch);
 
-    await this._createNotification({
-      recipient: batch.recipient,
-      type: batch.type,
-      targetType: batch.targetType,
-      targetId: batch.targetId,
-      title,
-      body,
-      actors: batch.actors,
-      actorCount: batch.actorCount,
-    });
+      await this._createNotification({
+        recipient: batch.recipient,
+        type: batch.type,
+        targetType: batch.targetType,
+        targetId: batch.targetId,
+        title,
+        body,
+        actors: batch.actors,
+        actorCount: batch.actorCount,
+      });
+    } catch (err) {
+      console.warn('_flushBatch error:', err.message);
+    }
   }
 
   _generateText(batch) {
@@ -256,10 +276,14 @@ class NotificationService {
   async _createNotification({ recipient, type, targetType, targetId, title, body, actors, actorCount }) {
     // Skip rate check for system notifications
     if (recipient) {
-      const rateLimited = await this._checkRate(recipient);
-      if (rateLimited) {
-        console.log(`⏳ Notification rate-limited for user ${recipient}`);
-        return null;
+      try {
+        const rateLimited = await this._checkRate(recipient);
+        if (rateLimited) {
+          console.log(`⏳ Notification rate-limited for user ${recipient}`);
+          return null;
+        }
+      } catch {
+        // Redis unavailable — skip rate check
       }
     }
 
@@ -277,7 +301,11 @@ class NotificationService {
 
     // Update unread counter in Redis
     if (recipient) {
-      await redis.incr(KEYS.UNREAD_COUNT(recipient));
+      try {
+        await redis.incr(KEYS.UNREAD_COUNT(recipient));
+      } catch {
+        // Redis unavailable — counter will be recalculated on next read
+      }
     }
 
     // Real-time delivery via Socket.IO
@@ -325,11 +353,19 @@ class NotificationService {
   // ─── Public API Methods ──────────────────────────────────────
 
   /**
-   * Get unread count from Redis (O(1))
+   * Get unread count from Redis (O(1)), fallback to MongoDB
    */
   async getUnreadCount(userId) {
-    const count = await redis.get(KEYS.UNREAD_COUNT(userId));
-    return parseInt(count) || 0;
+    try {
+      const count = await redis.get(KEYS.UNREAD_COUNT(userId));
+      if (count !== null) return parseInt(count) || 0;
+    } catch {}
+    // Fallback: count from MongoDB
+    try {
+      return await Notification.countDocuments({ recipient: userId, isRead: false });
+    } catch {
+      return 0;
+    }
   }
 
   /**
@@ -343,11 +379,15 @@ class NotificationService {
 
     // Decrement unread counter
     if (result.modifiedCount > 0) {
-      await redis.decrby(KEYS.UNREAD_COUNT(userId), result.modifiedCount);
-      // Ensure counter doesn't go negative
-      const current = await redis.get(KEYS.UNREAD_COUNT(userId));
-      if (parseInt(current) < 0) {
-        await redis.set(KEYS.UNREAD_COUNT(userId), '0');
+      try {
+        await redis.decrby(KEYS.UNREAD_COUNT(userId), result.modifiedCount);
+        // Ensure counter doesn't go negative
+        const current = await redis.get(KEYS.UNREAD_COUNT(userId));
+        if (parseInt(current) < 0) {
+          await redis.set(KEYS.UNREAD_COUNT(userId), '0');
+        }
+      } catch {
+        // Redis unavailable — counter will self-correct
       }
     }
 
@@ -362,7 +402,9 @@ class NotificationService {
       { recipient: userId, isRead: false },
       { isRead: true, readAt: new Date() }
     );
-    await redis.set(KEYS.UNREAD_COUNT(userId), '0');
+    try {
+      await redis.set(KEYS.UNREAD_COUNT(userId), '0');
+    } catch {}
   }
 }
 

@@ -1,5 +1,5 @@
 const Post = require('../models/Post');
-const { redis } = require('../config/redis');
+const { redis, isRedisAvailable } = require('../config/redis');
 
 // ─── Feed Score Calculator ────────────────────────────────────────
 // Computes the multi-signal feed ranking score for posts.

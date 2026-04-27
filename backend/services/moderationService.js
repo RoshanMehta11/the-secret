@@ -5,6 +5,9 @@ const eventBus = require('./eventBus');
 // Two-stage content moderation pipeline:
 //   Stage 1 (Sync, <5ms): Blocklist + pattern heuristics
 //   Stage 2 (Async): ML classification (stubbed for external API integration)
+//
+// GRACEFUL DEGRADATION: When Redis is unavailable, skips blocklist checks
+// and strike tracking. Pattern heuristics still work.
 
 // Default blocklist — stored in Redis for hot updates by admins
 const DEFAULT_BLOCKLIST = [
@@ -76,7 +79,7 @@ class ModerationService {
     }
 
     // Repeated characters (>4 same char in a row): "aaaaaaa"
-    if (/(.)\1{4,}/g.test(content)) {
+    if (/(.)\\1{4,}/g.test(content)) {
       triggers.push('pattern:repeated_chars');
       score += 0.2;
     }
@@ -117,31 +120,6 @@ class ModerationService {
     const startTime = Date.now();
 
     try {
-      // ── Option 1: OpenAI Moderation API ──
-      // Uncomment when OPENAI_API_KEY is configured:
-      //
-      // const response = await fetch('https://api.openai.com/v1/moderations', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-      //     'Content-Type': 'application/json',
-      //   },
-      //   body: JSON.stringify({ input: content }),
-      // });
-      // const data = await response.json();
-      // const categories = data.results[0].category_scores;
-      // return {
-      //   scores: {
-      //     toxicity: Math.max(categories.hate, categories.harassment, categories['hate/threatening']),
-      //     spam: 0, // OpenAI doesn't detect spam
-      //     threat: categories['violence'],
-      //     identity_attack: categories.hate,
-      //     sexually_explicit: categories.sexual,
-      //   },
-      //   model: 'openai-moderation',
-      //   latencyMs: Date.now() - startTime,
-      // };
-
       // ── Fallback: Heuristic-based scoring ──
       // Simple keyword-based scoring as placeholder
       const scores = {
@@ -222,31 +200,48 @@ class ModerationService {
   async recordStrike(userId) {
     if (!userId) return { strikes: 0, autoBanned: false };
 
-    const key = KEYS.USER_STRIKES(userId);
-    const strikes = await redis.incr(key);
-    if (strikes === 1) {
-      await redis.expire(key, 3600); // 1 hour window
-    }
+    try {
+      const key = KEYS.USER_STRIKES(userId);
+      const strikes = await redis.incr(key);
+      if (strikes === 1) {
+        await redis.expire(key, 3600); // 1 hour window
+      }
 
-    const autoBanned = strikes >= 3;
-    return { strikes, autoBanned };
+      const autoBanned = strikes >= 3;
+      return { strikes, autoBanned };
+    } catch {
+      // Redis unavailable — skip strike tracking
+      return { strikes: 0, autoBanned: false };
+    }
   }
 
   // ─── Blocklist Management ────────────────────────────────────
 
   async getBlocklist() {
-    return await redis.smembers(KEYS.BLOCKLIST);
+    try {
+      return await redis.smembers(KEYS.BLOCKLIST);
+    } catch {
+      return [];
+    }
   }
 
   async addToBlocklist(words) {
-    if (words.length > 0) {
-      await redis.sadd(KEYS.BLOCKLIST, ...words);
+    try {
+      if (words.length > 0) {
+        await redis.sadd(KEYS.BLOCKLIST, ...words);
+      }
+    } catch {
+      console.warn('⚠️ Could not add to blocklist — Redis unavailable');
     }
   }
 
   async removeFromBlocklist(words) {
-    if (words.length > 0) {
-      await redis.srem(KEYS.BLOCKLIST, ...words);
+    try {
+      if (words.length > 0) {
+        await redis.srem(KEYS.BLOCKLIST, ...words);
+      }
+    } catch {
+      console.warn('⚠️ Could not remove from blocklist — Redis unavailable');
     }
   }
 

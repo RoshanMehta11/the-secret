@@ -11,7 +11,7 @@ const { v4: uuidv4 } = require('uuid');
 dotenv.config();
 
 const connectDB = require('./config/db');
-const { redis, createPubClient, createSubClient } = require('./config/redis');
+const { redis, createPubClient, createSubClient, isRedisAvailable } = require('./config/redis');
 
 // Models
 const Message = require('./models/Message');
@@ -47,7 +47,6 @@ const server = http.createServer(app);
 // ─── Socket.IO Setup with Redis Adapter ───────────────────────────
 let io;
 try {
-  const { createAdapter } = require('@socket.io/redis-adapter');
   const pubClient = createPubClient();
   const subClient = createSubClient();
 
@@ -58,16 +57,21 @@ try {
     maxHttpBufferSize: 1e6, // 1MB max message size
   });
 
-  // Use Redis adapter for horizontal scaling
-  Promise.all([
-    new Promise((resolve) => pubClient.on('connect', resolve)),
-    new Promise((resolve) => subClient.on('connect', resolve)),
-  ]).then(() => {
-    io.adapter(createAdapter(pubClient, subClient));
-    console.log('🔌 Socket.IO Redis adapter connected');
-  }).catch((err) => {
-    console.warn('⚠️ Socket.IO Redis adapter failed, using in-memory:', err.message);
-  });
+  // Only attach Redis adapter if both pub/sub clients exist (REDIS_URL is set)
+  if (pubClient && subClient) {
+    const { createAdapter } = require('@socket.io/redis-adapter');
+    Promise.all([
+      new Promise((resolve) => pubClient.on('connect', resolve)),
+      new Promise((resolve) => subClient.on('connect', resolve)),
+    ]).then(() => {
+      io.adapter(createAdapter(pubClient, subClient));
+      console.log('🔌 Socket.IO Redis adapter connected');
+    }).catch((err) => {
+      console.warn('⚠️ Socket.IO Redis adapter failed, using in-memory:', err.message);
+    });
+  } else {
+    console.log('ℹ️ Socket.IO using in-memory adapter (no Redis)');
+  }
 } catch (err) {
   console.warn('⚠️ Redis adapter not available, using in-memory Socket.IO');
   io = new Server(server, {
