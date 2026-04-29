@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { chatAPI } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { useSocketContext } from '../../context/SocketContext';
+import { useChatContext } from '../../context/ChatContext';
 import { emitSocketEvent } from '../../utils/socket';
 import { getMoodTheme } from '../../utils/moodEngine';
 import MessageBubble from './MessageBubble';
@@ -10,6 +11,7 @@ import TypingDots from './TypingDots';
 export default function ChatWindow({ conversation, onClose, onMinimize }) {
   const { user } = useAuth();
   const { socket, isUserOnline, typingUsers } = useSocketContext();
+  const { setActiveConversationId } = useChatContext();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -49,8 +51,10 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
   useEffect(() => {
     if (!socket) return;
     socket.emit('join_conversation', convId);
+    setActiveConversationId(convId);
     return () => {
       socket.emit('leave_conversation', convId);
+      setActiveConversationId(null);
     };
   }, [socket, convId]);
 
@@ -173,7 +177,10 @@ export default function ChatWindow({ conversation, onClose, onMinimize }) {
           <div className="chat-window-name">{otherUser?.username || 'User'}</div>
           {isOnline && <div className="chat-window-status">● Online</div>}
         </div>
-        <div className="e2e-badge">🔒 E2E</div>
+        {otherUser?.publicKey && localStorage.getItem('myPublicKey')
+          ? <div className="e2e-badge">🔒 E2E</div>
+          : <div style={{ fontSize: '0.65rem', color: 'var(--warning)' }}>⚠️ Not encrypted</div>
+        }
         <div className="chat-window-actions">
           <button className="chat-window-btn" onClick={onMinimize} title="Minimize">─</button>
           <button className="chat-window-btn" onClick={onClose} title="Close">✕</button>

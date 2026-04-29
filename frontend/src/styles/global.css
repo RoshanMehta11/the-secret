@@ -331,4 +331,5 @@ tr:hover td { background: rgba(124, 58, 237, 0.03); }
   .sidebar-link { white-space: nowrap; }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
   .container-wide { padding: 0 12px; }
+  .page { padding-bottom: 90px; /* space for FAB */ }
 }

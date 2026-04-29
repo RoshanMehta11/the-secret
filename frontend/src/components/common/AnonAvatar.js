@@ -12,16 +12,16 @@ export default function AnonAvatar({ userId, size = 36, showTag = false, classNa
 
   return (
     <div className={`anon-avatar ${className}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-      <div
+      <img
+        src={`data:image/svg+xml;base64,${btoa(svgHtml)}`}
+        width={size}
+        height={size}
         style={{
-          width: size,
-          height: size,
           borderRadius: 8,
-          overflow: 'hidden',
           flexShrink: 0,
           background: `${color}22`,
         }}
-        dangerouslySetInnerHTML={{ __html: svgHtml }}
+        alt="avatar"
       />
       {showTag && (
         <span style={{ fontSize: '0.7rem', color: '#64748b', fontFamily: "'Courier New', monospace", fontWeight: 500 }}>

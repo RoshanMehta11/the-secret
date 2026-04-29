@@ -128,10 +128,14 @@ class FeedScoreService {
    */
   async invalidateFeedCache() {
     try {
-      const keys = await redis.keys('feed:global:cursor:*');
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await redis.scan(
+          cursor, 'MATCH', 'feed:global:cursor:*', 'COUNT', 100
+        );
+        cursor = nextCursor;
+        if (keys.length > 0) await redis.del(...keys);
+      } while (cursor !== '0');
     } catch {
       // Redis may not be available
     }

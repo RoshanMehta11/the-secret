@@ -25,7 +25,7 @@ exports.register = async (req, res) => {
     const user = await User.create({ username, email, password });
 
     // Generate dual token pair (access + refresh)
-    const { accessToken, refreshToken } = generateTokenPair(user._id);
+    const { accessToken, refreshToken } = await generateTokenPair(user._id);
 
     eventBus.emitEvent('activity', { type: 'login', userId: user._id.toString(), timestamp: Date.now() });
 
@@ -69,7 +69,7 @@ exports.login = async (req, res) => {
     await user.save();
 
     // Generate dual token pair
-    const { accessToken, refreshToken } = generateTokenPair(user._id);
+    const { accessToken, refreshToken } = await generateTokenPair(user._id);
 
     eventBus.emitEvent('activity', { type: 'login', userId: user._id.toString(), timestamp: Date.now() });
 
@@ -116,7 +116,7 @@ exports.googleLogin = async (req, res) => {
     user.lastLogin = Date.now();
     await user.save();
 
-    const { accessToken, refreshToken } = generateTokenPair(user._id);
+    const { accessToken, refreshToken } = await generateTokenPair(user._id);
 
     eventBus.emitEvent('activity', { type: 'login', userId: user._id.toString(), timestamp: Date.now() });
 
@@ -160,7 +160,7 @@ exports.refreshToken = async (req, res) => {
     }
 
     // Rotate refresh token (one-time use)
-    const newTokens = rotateRefreshToken(userId, refreshToken);
+    const newTokens = await rotateRefreshToken(userId, refreshToken);
     if (!newTokens) {
       // Token reuse detected — all sessions invalidated
       return res.status(401).json({
@@ -187,7 +187,7 @@ exports.logout = async (req, res) => {
   try {
     const { refreshToken } = req.body;
     if (refreshToken && req.user) {
-      revokeRefreshToken(req.user._id, refreshToken);
+      await revokeRefreshToken(req.user._id, refreshToken);
     }
     res.json({ success: true, message: 'Logged out successfully' });
   } catch (err) {
@@ -199,7 +199,7 @@ exports.logout = async (req, res) => {
 // @route  POST /api/auth/logout-all
 exports.logoutAll = async (req, res) => {
   try {
-    revokeAllRefreshTokens(req.user._id);
+    await revokeAllRefreshTokens(req.user._id);
     res.json({ success: true, message: 'Logged out from all devices' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

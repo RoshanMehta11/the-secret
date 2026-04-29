@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { connectSocket, disconnectSocket, getSocket, sendHeartbeat } from '../utils/socket';
 import { notificationAPI, chatAPI } from '../utils/api';
+import { useChatContext } from './ChatContext';
 
 const SocketContext = createContext(null);
 
@@ -12,6 +13,17 @@ export function SocketProvider({ children, user }) {
   const [typingUsers, setTypingUsers] = useState(new Map()); // convId -> Set<userId>
   const [notifications, setNotifications] = useState([]); // recent toasts
   const heartbeatRef = useRef(null);
+
+  // Get active conversation from ChatContext to avoid incrementing badge for open chats
+  let activeConversationId = null;
+  try {
+    const chatCtx = useChatContext();
+    activeConversationId = chatCtx.activeConversationId;
+  } catch {
+    // ChatContext may not be available — safe to ignore
+  }
+  const activeConvRef = useRef(activeConversationId);
+  activeConvRef.current = activeConversationId;
 
   // Connect socket when user is logged in
   useEffect(() => {
@@ -65,11 +77,15 @@ export function SocketProvider({ children, user }) {
     });
 
     // ── Chat Events ────────────────────────────────────
-    socket.on('message_notification', () => {
+    socket.on('message_notification', (msg) => {
+      const msgConvId = msg?.conversationId || msg?.conversation;
+      if (msgConvId && msgConvId === activeConvRef.current) return; // skip if chat is open
       setUnreadMessages((prev) => prev + 1);
     });
 
-    socket.on('new_message', () => {
+    socket.on('new_message', (msg) => {
+      const msgConvId = msg?.conversationId || msg?.conversation;
+      if (msgConvId && msgConvId === activeConvRef.current) return; // skip if chat is open
       setUnreadMessages((prev) => prev + 1);
     });
 

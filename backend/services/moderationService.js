@@ -79,7 +79,7 @@ class ModerationService {
     }
 
     // Repeated characters (>4 same char in a row): "aaaaaaa"
-    if (/(.)\\1{4,}/g.test(content)) {
+    if (/(.)\1{4,}/g.test(content)) {
       triggers.push('pattern:repeated_chars');
       score += 0.2;
     }

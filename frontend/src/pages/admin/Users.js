@@ -26,8 +26,10 @@ export default function AdminUsers() {
 
   const handleBan = async () => {
     try {
-      const { data } = await adminAPI.banUser(banModal._id, { reason: banReason });
-      setUsers((prev) => prev.map((u) => u._id === banModal._id ? { ...u, isBanned: data.isBanned, banReason: banReason } : u));
+      const { data } = await adminAPI.banUser(banModal._id, {
+        reason: banModal.isBanned ? '' : banReason,
+      });
+      setUsers((prev) => prev.map((u) => u._id === banModal._id ? { ...u, isBanned: data.isBanned, banReason: banModal.isBanned ? '' : banReason } : u));
       toast.success(data.message);
       setBanModal(null); setBanReason('');
     } catch { toast.error('Action failed'); }
@@ -88,7 +90,7 @@ export default function AdminUsers() {
                     {u.role !== 'admin' && (
                       <button
                         className={`btn btn-sm ${u.isBanned ? 'btn-success' : 'btn-danger'}`}
-                        onClick={() => u.isBanned ? handleBan() || setBanModal(u) : setBanModal(u)}
+                        onClick={() => setBanModal(u)}
                       >
                         {u.isBanned ? 'Unban' : 'Ban'}
                       </button>

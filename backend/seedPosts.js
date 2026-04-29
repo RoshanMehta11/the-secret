@@ -5,6 +5,11 @@
  * ═══════════════════════════════════════════════════════════════
  */
 
+if (process.env.NODE_ENV === 'production') {
+  console.error('🚫 Cannot run seed script in production');
+  process.exit(1);
+}
+
 const mongoose = require('mongoose');
 const Post = require('./models/Post');
 const User = require('./models/User');

@@ -3,6 +3,7 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: process.env.REACT_APP_API_URL || '/api',
   headers: { 'Content-Type': 'application/json' },
+  timeout: 15000,
 });
 
 // ── Request Interceptor: Attach token ────────────────────────
@@ -77,6 +78,16 @@ api.interceptors.response.use(
       localStorage.removeItem('refreshToken');
       window.location.href = '/login';
     }
+
+    // Rate limit feedback
+    if (err.response?.status === 429) {
+      const reset = err.response.headers['ratelimit-reset'];
+      const seconds = reset
+        ? Math.ceil(reset - Date.now() / 1000)
+        : 60;
+      err.message = `Rate limited. Try again in ${seconds}s`;
+    }
+
     return Promise.reject(err);
   }
 );

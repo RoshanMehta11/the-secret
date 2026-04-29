@@ -10,6 +10,12 @@ const { v4: uuidv4 } = require('uuid');
 // ── Load config before anything else ──────────────────────────────
 dotenv.config();
 
+// ── JWT_SECRET Startup Assertion ──────────────────────────────────
+if (!process.env.JWT_SECRET ||
+    process.env.JWT_SECRET === 'your_random_jwt_secret_here') {
+  throw new Error('FATAL: Set a real JWT_SECRET in .env');
+}
+
 const connectDB = require('./config/db');
 const { redis, createPubClient, createSubClient, isRedisAvailable } = require('./config/redis');
 
@@ -124,15 +130,16 @@ app.use('/api/chatrooms', require('./routes/chatrooms'));
 
 // Health check
 app.get('/api/health', async (_, res) => {
-  let redisOk = false;
-  try {
-    await redis.ping();
-    redisOk = true;
-  } catch {}
+  const mongoose = require('mongoose');
+  const mongoOk = mongoose.connection.readyState === 1;
 
-  res.json({
-    status: 'OK',
-    timestamp: new Date(),
+  let redisOk = false;
+  try { await redis.ping(); redisOk = true; } catch {}
+
+  const status = mongoOk ? 'OK' : 'DEGRADED';
+  res.status(mongoOk ? 200 : 503).json({
+    status,
+    mongo: mongoOk ? 'connected' : 'disconnected',
     redis: redisOk ? 'connected' : 'disconnected',
     uptime: process.uptime(),
   });
@@ -143,8 +150,15 @@ app.use((req, res) => res.status(404).json({ success: false, message: 'Route not
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ success: false, message: err.message || 'Server Error' });
+  if (process.env.NODE_ENV !== 'production') {
+    console.error(err.stack);
+  }
+  res.status(500).json({
+    success: false,
+    message: process.env.NODE_ENV === 'production'
+      ? 'Server Error'
+      : err.message || 'Server Error',
+  });
 });
 
 // ─── Socket.IO Authentication Middleware ──────────────────────────
@@ -367,7 +381,10 @@ io.on('connection', async (socket) => {
 
         // CRITICAL FIX: Also send directly to recipient's personal user room
         // This ensures they receive the message even if chat window is closed
-        io.to(recipientStr).emit('receive_message', messagePayload);
+        // Only deliver to the OTHER user, not the sender
+        if (recipientStr !== userId) {
+          io.to(recipientStr).emit('receive_message', messagePayload);
+        }
 
         if (isRecipientOnline) {
           // Recipient is online — also send notification badge

@@ -24,6 +24,7 @@ class RedisStub {
   async decrby() { return 0; }
   async expire() { return 1; }
   async keys() { return []; }
+  async scan() { return ['0', []]; }
   async ping() { throw new Error('Redis not configured'); }
 
   // Set operations

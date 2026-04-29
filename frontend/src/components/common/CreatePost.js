@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { postsAPI } from '../../utils/api';
 import { useAuth } from '../../context/AuthContext';
 import { MOODS, detectMood } from '../../utils/moodEngine';
@@ -12,13 +12,19 @@ export default function CreatePost({ onPostCreated }) {
   const [mood, setMood] = useState('random');
   const [loading, setLoading] = useState(false);
 
+  const moodDetectTimer = useRef(null);
+  const userChoseMood = useRef(false);
+
   const handleContentChange = (e) => {
     const text = e.target.value;
     setContent(text);
-    // Auto-detect mood as user types (debounced feel since it's on change)
-    if (text.length > 20) {
-      const detected = detectMood(text);
-      if (detected !== 'random') setMood(detected);
+    // Only auto-detect if user hasn't manually chosen
+    if (!userChoseMood.current && text.length > 20) {
+      clearTimeout(moodDetectTimer.current);
+      moodDetectTimer.current = setTimeout(() => {
+        const detected = detectMood(text);
+        if (detected !== 'random') setMood(detected);
+      }, 500);
     }
   };
 
@@ -32,6 +38,7 @@ export default function CreatePost({ onPostCreated }) {
       setContent('');
       setTags('');
       setMood('random');
+      userChoseMood.current = false;
       toast.success('Secret shared! 🔒');
       if (onPostCreated) onPostCreated(data.post);
     } catch (err) {
@@ -58,7 +65,7 @@ export default function CreatePost({ onPostCreated }) {
               key={key}
               type="button"
               className={`mood-option ${mood === key ? 'active' : ''}`}
-              onClick={() => setMood(key)}
+              onClick={() => { userChoseMood.current = true; setMood(key); }}
               style={
                 mood === key
                   ? { '--mood-border': m.border, '--mood-bg': m.bg, '--mood-accent': m.accent }

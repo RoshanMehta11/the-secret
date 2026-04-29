@@ -87,13 +87,18 @@ export default function Home() {
   }, [sortMode, moodFilter]); // eslint-disable-line
 
   // ── Infinite Scroll ────────────────────────────────────
+  const loadingMoreRef = useRef(false);
+
   const loadMore = useCallback(() => {
-    // GUARD: only trigger if we have more AND we're not already loading
-    if (!hasMore || loadingMore || loading) return;
+    if (!hasMore || loadingMoreRef.current || loading) return;
     const currentCursor = cursorRef.current;
     if (!currentCursor) return;
-    loadPosts(false, currentCursor);
-  }, [hasMore, loadingMore, loading, loadPosts]);
+
+    loadingMoreRef.current = true;
+    loadPosts(false, currentCursor).finally(() => {
+      loadingMoreRef.current = false;
+    });
+  }, [hasMore, loading, loadPosts]);
   const sentinelRef = useInfiniteScroll(loadMore, hasMore, loadingMore);
 
   // ── Real-Time: New posts via socket ────────────────────
@@ -150,7 +155,11 @@ export default function Home() {
             <LiveIndicator count={newPostCount} onClick={revealNewPosts} />
 
             {loading ? (
-              <div className="spinner"><div className="spin" /></div>
+              <>
+                <div className="skeleton-post" />
+                <div className="skeleton-post" style={{ opacity: 0.7 }} />
+                <div className="skeleton-post" style={{ opacity: 0.4 }} />
+              </>
             ) : posts.length === 0 ? (
               <div className="card empty-state">
                 <div className="empty-state-icon">🌬️</div>

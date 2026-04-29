@@ -1,13 +1,15 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/User');
+const { redis, isRedisAvailable } = require('../config/redis');
 
 // ─── Token Configuration ──────────────────────────────────────────
 const ACCESS_TOKEN_EXPIRY = '15m';       // Short-lived access token
 const REFRESH_TOKEN_EXPIRY = '7d';       // Long-lived refresh token
 const REFRESH_TOKEN_BYTES = 64;          // Cryptographic random bytes
+const REFRESH_TOKEN_TTL = 7 * 24 * 3600; // 7 days in seconds
 
-// In-memory store for refresh tokens (replace with Redis in production)
+// In-memory fallback store for when Redis is unavailable
 // Structure: Map<userId, Set<tokenHash>>
 const refreshTokenStore = new Map();
 
@@ -43,17 +45,32 @@ const hashRefreshToken = (token) => {
 
 /**
  * Generate both access + refresh tokens, store refresh hash
+ * Uses Redis when available, falls back to in-memory Map
  */
-const generateTokenPair = (userId) => {
+const generateTokenPair = async (userId) => {
   const accessToken = generateAccessToken(userId);
   const refreshToken = generateRefreshToken();
   const refreshHash = hashRefreshToken(refreshToken);
+  const userKey = userId.toString();
 
-  // Store the refresh token hash
-  if (!refreshTokenStore.has(userId.toString())) {
-    refreshTokenStore.set(userId.toString(), new Set());
+  if (isRedisAvailable()) {
+    try {
+      await redis.sadd(`rt:${userKey}`, refreshHash);
+      await redis.expire(`rt:${userKey}`, REFRESH_TOKEN_TTL);
+    } catch {
+      // Fallback to in-memory if Redis write fails
+      if (!refreshTokenStore.has(userKey)) {
+        refreshTokenStore.set(userKey, new Set());
+      }
+      refreshTokenStore.get(userKey).add(refreshHash);
+    }
+  } else {
+    // In-memory fallback
+    if (!refreshTokenStore.has(userKey)) {
+      refreshTokenStore.set(userKey, new Set());
+    }
+    refreshTokenStore.get(userKey).add(refreshHash);
   }
-  refreshTokenStore.get(userId.toString()).add(refreshHash);
 
   return { accessToken, refreshToken };
 };
@@ -64,41 +81,72 @@ const generateTokenPair = (userId) => {
  * Validate a refresh token and rotate it (one-time use)
  * Returns new token pair if valid, null if invalid
  */
-const rotateRefreshToken = (userId, oldRefreshToken) => {
+const rotateRefreshToken = async (userId, oldRefreshToken) => {
   const oldHash = hashRefreshToken(oldRefreshToken);
-  const userTokens = refreshTokenStore.get(userId.toString());
+  const userKey = userId.toString();
 
-  if (!userTokens || !userTokens.has(oldHash)) {
-    // Token not found — possibly stolen or already used
-    // Security measure: invalidate ALL refresh tokens for this user
-    refreshTokenStore.delete(userId.toString());
-    return null;
+  if (isRedisAvailable()) {
+    try {
+      const exists = await redis.sismember(`rt:${userKey}`, oldHash);
+      if (!exists) {
+        // Token not found — possibly stolen or already used
+        // Security measure: invalidate ALL refresh tokens for this user
+        await redis.del(`rt:${userKey}`);
+        return null;
+      }
+      // Remove old token (one-time use)
+      await redis.srem(`rt:${userKey}`, oldHash);
+      // Generate new pair
+      return generateTokenPair(userId);
+    } catch {
+      // Fall through to in-memory
+    }
   }
 
-  // Remove old token (one-time use)
+  // In-memory fallback
+  const userTokens = refreshTokenStore.get(userKey);
+  if (!userTokens || !userTokens.has(oldHash)) {
+    refreshTokenStore.delete(userKey);
+    return null;
+  }
   userTokens.delete(oldHash);
-
-  // Generate new pair
   return generateTokenPair(userId);
 };
 
 /**
  * Invalidate a specific refresh token (logout from one device)
  */
-const revokeRefreshToken = (userId, refreshToken) => {
+const revokeRefreshToken = async (userId, refreshToken) => {
   const hash = hashRefreshToken(refreshToken);
-  const userTokens = refreshTokenStore.get(userId.toString());
+  const userKey = userId.toString();
+
+  if (isRedisAvailable()) {
+    try {
+      await redis.srem(`rt:${userKey}`, hash);
+      return;
+    } catch {}
+  }
+
+  // In-memory fallback
+  const userTokens = refreshTokenStore.get(userKey);
   if (userTokens) {
     userTokens.delete(hash);
-    if (userTokens.size === 0) refreshTokenStore.delete(userId.toString());
+    if (userTokens.size === 0) refreshTokenStore.delete(userKey);
   }
 };
 
 /**
  * Invalidate ALL refresh tokens for a user (logout everywhere / password change)
  */
-const revokeAllRefreshTokens = (userId) => {
-  refreshTokenStore.delete(userId.toString());
+const revokeAllRefreshTokens = async (userId) => {
+  const userKey = userId.toString();
+
+  if (isRedisAvailable()) {
+    try {
+      await redis.del(`rt:${userKey}`);
+    } catch {}
+  }
+  refreshTokenStore.delete(userKey);
 };
 
 // ─── Express Middleware ───────────────────────────────────────────

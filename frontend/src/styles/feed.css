@@ -261,3 +261,23 @@
   .feed-tabs { flex-wrap: wrap; }
   .mood-filter { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 4px; }
 }
+
+/* ── Skeleton Loading ─────────────────────────────────── */
+.skeleton-post {
+  height: 180px;
+  border-radius: var(--radius);
+  margin-bottom: var(--gap);
+  background: linear-gradient(
+    90deg,
+    var(--surface) 25%,
+    var(--surface-light) 50%,
+    var(--surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
